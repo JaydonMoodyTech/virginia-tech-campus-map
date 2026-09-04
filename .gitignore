@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Pixel Campus ---
+# large Overpass API dumps, rebuildable via tools/fetch_osm.py
+raw/
+.vercel
+node_modules/
+.DS_Store
+!.env.example

@@ -1,0 +1,81 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #1a1c2c;
+  font-family: ui-monospace, monospace;
+}
+
+#map {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  touch-action: none;
+  image-rendering: pixelated;
+  cursor: grab;
+}
+
+#map:active { cursor: grabbing; }
+
+#attribution {
+  position: fixed;
+  bottom: 4px;
+  right: 6px;
+  font-size: 10px;
+  color: #f4f4f4;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 2px 6px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+#controls {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#controls button {
+  width: 40px;
+  height: 34px;
+  font: 700 15px/1 ui-monospace, monospace;
+  color: #f4f4f4;
+  background: rgba(26, 28, 44, 0.85);
+  border: 2px solid #6b6b6b;
+  border-radius: 2px;
+  cursor: pointer;
+  image-rendering: pixelated;
+}
+
+#controls button:hover:not(:disabled) {
+  background: #3a6ea5;
+  border-color: #f4f4f4;
+}
+
+#controls button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+#hint {
+  position: fixed;
+  bottom: 4px;
+  left: 6px;
+  font-size: 10px;
+  color: #f4f4f4;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 2px 6px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* On narrow screens the hint and the attribution collide on one line,
+   so stack the hint above it. */
+@media (max-width: 620px) {
+  #hint { bottom: 22px; }
+}
