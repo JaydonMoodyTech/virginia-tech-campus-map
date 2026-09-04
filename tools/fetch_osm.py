@@ -3,8 +3,9 @@
 import json, os, sys, time
 import requests
 
-# Virginia Tech core campus. Verify on openstreetmap.org and adjust.
-SOUTH, WEST, NORTH, EAST = 37.2200, -80.4290, 37.2360, -80.4130
+# VT campus plus the Hethwood corridor, so the CAS/HXP/HW* routes
+# fit end to end. Verify on openstreetmap.org and adjust.
+SOUTH, WEST, NORTH, EAST = 37.2110, -80.4570, 37.2360, -80.4130
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OUT_PATH = "raw/osm_dump.json"

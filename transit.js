@@ -241,49 +241,78 @@ function selectRoute(id) {
 }
 
 // --- Rendering: map overlay -------------------------------------------
-export function drawTransit(c, px, camera) {
-  // Deliberately not gated on the panel being open: collapsing the panel
-  // on a narrow screen is how you get a look at the map, and losing the
-  // route the moment you do that defeats the point. "Back" clears it.
-  if (!state.route || !state.pattern || !proj) return;
-  const r = state.route;
-  const toScreen = (col, row) => [col * px - camera.x, row * px - camera.y];
+// Stops and buses are drawn at a constant screen size rather than scaled
+// with the zoom: they are map furniture, like pins, and a bus that shrank
+// to a speck at low zoom would defeat the point of tracking it.
 
-  // Route shape.
+const STOP_DOT_PX = 0;        // stops are always worth showing as dots
+const STOP_ICON_PX = 3;       // at/above this, draw the full sign icon
+
+/** Every stop served by the five routes, deduplicated. */
+function allStops() {
+  if (!state.data) return [];
+  const seen = new Set();
+  const out = [];
+  for (const r of state.data.routes) {
+    for (const p of r.patterns) {
+      for (const i of p.stops) {
+        if (seen.has(i)) continue;
+        seen.add(i);
+        out.push({ stop: state.data.stops[i], color: r.color });
+      }
+    }
+  }
+  return out;
+}
+
+export function drawTransit(c, px, camera) {
+  if (!state.data || !proj) return;
+  const toScreen = (col, row) => [col * px - camera.x, row * px - camera.y];
+  const onScreen = (x, y, m) =>
+    x > -m && y > -m && x < window.innerWidth + m && y < window.innerHeight + m;
+
   c.save();
   c.lineJoin = "round";
   c.lineCap = "round";
-  c.strokeStyle = "rgba(0,0,0,0.45)";
-  c.lineWidth = Math.max(3, px * 0.9) + 3;
-  strokePath(c, state.pattern.path, toScreen);
-  c.strokeStyle = r.color;
-  c.lineWidth = Math.max(3, px * 0.9);
-  strokePath(c, state.pattern.path, toScreen);
 
-  // Stops.
-  const dotR = Math.max(3, Math.min(9, px * 0.7));
-  for (const s of stopsOf(state.pattern)) {
-    const [x, y] = toScreen(s.col, s.row);
-    if (x < -20 || y < -20 || x > window.innerWidth + 20 || y > window.innerHeight + 20) continue;
-    const sel = s.code === state.selectedStop;
-    c.beginPath();
-    c.arc(x, y, sel ? dotR + 3 : dotR, 0, Math.PI * 2);
-    c.fillStyle = "#f7f3e8";
-    c.fill();
-    c.lineWidth = 2;
-    c.strokeStyle = sel ? "#f2c14e" : "#2c2a26";
-    c.stroke();
+  // Selected route shape, under everything else.
+  if (state.route && state.pattern) {
+    c.strokeStyle = "rgba(0,0,0,0.45)";
+    c.lineWidth = Math.max(3, px * 0.9) + 3;
+    strokePath(c, state.pattern.path, toScreen);
+    c.strokeStyle = state.route.color;
+    c.lineWidth = Math.max(3, px * 0.9);
+    strokePath(c, state.pattern.path, toScreen);
   }
 
-  // Live buses.
-  for (const bus of busesOnRoute(r)) {
+  // Stops for all five routes; the selected route's are emphasised.
+  if (px >= STOP_DOT_PX) {
+    const onRoute = new Set();
+    if (state.pattern) state.pattern.stops.forEach(i => onRoute.add(state.data.stops[i].code));
+    for (const { stop, color } of allStops()) {
+      const [x, y] = toScreen(stop.col, stop.row);
+      if (!onScreen(x, y, 24)) continue;
+      const active = onRoute.has(stop.code);
+      if (state.route && !active) continue;      // focus the chosen route
+      drawStop(c, x, y, px, color, stop.code === state.selectedStop, active);
+    }
+  }
+
+  // Live buses, every route, always.
+  for (const bus of state.buses) {
+    const route = routeById(bus.routeId);
+    if (!route) continue;
     const pos = busPosition(bus);
     if (!pos) continue;
     const [x, y] = toScreen(pos[0], pos[1]);
-    if (x < -30 || y < -30 || x > window.innerWidth + 30 || y > window.innerHeight + 30) continue;
-    drawBus(c, x, y, r.color, bus);
+    if (!onScreen(x, y, 40)) continue;
+    drawBus(c, x, y, route, bus, px);
   }
   c.restore();
+}
+
+function routeById(id) {
+  return state.data ? state.data.routes.find(r => r.id === id) : null;
 }
 
 function strokePath(c, path, toScreen) {
@@ -295,37 +324,102 @@ function strokePath(c, path, toScreen) {
   c.stroke();
 }
 
-function drawBus(c, x, y, color, bus) {
-  const w = 18, h = 12;
-  c.save();
-  c.translate(Math.round(x), Math.round(y));
+/** A bus-stop sign: post, plate, and a bus glyph once there is room. */
+function drawStop(c, x, y, px, color, selected, active) {
+  x = Math.round(x); y = Math.round(y);
+  if (px < STOP_ICON_PX) {
+    c.beginPath();
+    c.arc(x, y, selected ? 5 : 3.5, 0, Math.PI * 2);
+    c.fillStyle = active ? "#f7f3e8" : "#cfc6b6";
+    c.fill();
+    c.lineWidth = 2;
+    c.strokeStyle = "#2c2a26";
+    c.stroke();
+    return;
+  }
+
+  const w = 16, h = 13, post = 8;
+  c.strokeStyle = "#2c2a26";
+  c.lineWidth = 2;
+  c.beginPath();                              // post
+  c.moveTo(x, y);
+  c.lineTo(x, y - post);
+  c.stroke();
+
+  const top = y - post - h;
   c.fillStyle = "rgba(0,0,0,0.35)";
-  c.fillRect(-w / 2 + 1, -h / 2 + 2, w, h);
-  c.fillStyle = color;
+  c.fillRect(x - w / 2 + 1, top + 2, w, h);
+  c.fillStyle = selected ? "#f2c14e" : "#f7f3e8";
+  c.fillRect(x - w / 2, top, w, h);
+  c.strokeRect(x - w / 2, top, w, h);
+
+  c.fillStyle = color;                        // little bus on the plate
+  c.fillRect(x - 5, top + 3, 10, 6);
+  c.fillStyle = "rgba(255,255,255,0.92)";     // windows
+  c.fillRect(x - 4, top + 4, 8, 2);
+  c.fillStyle = "#2c2a26";                    // wheels
+  c.fillRect(x - 4, top + 9, 2, 2);
+  c.fillRect(x + 2, top + 9, 2, 2);
+}
+
+/** A little bus, drawn side-on so it reads at a glance. */
+function drawBus(c, x, y, route, bus, px) {
+  const w = 22, h = 14;
+  x = Math.round(x); y = Math.round(y);
+  c.save();
+  c.translate(x, y);
+
+  c.fillStyle = "rgba(0,0,0,0.35)";           // ground shadow
+  c.beginPath();
+  c.ellipse(0, h / 2 + 2, w / 2 - 1, 3, 0, 0, Math.PI * 2);
+  c.fill();
+
+  c.fillStyle = route.color;                  // body
   c.fillRect(-w / 2, -h / 2, w, h);
-  c.fillStyle = "rgba(255,255,255,0.85)";
-  c.fillRect(-w / 2 + 2, -h / 2 + 2, w - 4, 4);          // windscreen band
+  c.fillStyle = "rgba(255,255,255,0.9)";      // windows
+  for (let i = 0; i < 3; i++) c.fillRect(-w / 2 + 3 + i * 6, -h / 2 + 3, 4, 4);
+  c.fillStyle = "#ffe9a8";                    // headlight
+  c.fillRect(w / 2 - 3, -1, 2, 3);
+  c.fillStyle = "#241f1c";                    // wheels
+  c.fillRect(-w / 2 + 3, h / 2 - 2, 4, 3);
+  c.fillRect(w / 2 - 7, h / 2 - 2, 4, 3);
   c.strokeStyle = "#241f1c";
   c.lineWidth = 2;
   c.strokeRect(-w / 2, -h / 2, w, h);
+
   const load = parseInt(bus.percentOfCapacity, 10);
-  if (!isNaN(load) && load >= 80) {                       // nearly full
+  if (!isNaN(load) && load >= 80) {           // nearly full
     c.fillStyle = "#e2564a";
-    c.fillRect(w / 2 - 4, -h / 2 - 4, 4, 4);
+    c.beginPath();
+    c.arc(w / 2, -h / 2, 3.5, 0, Math.PI * 2);
+    c.fill();
+    c.strokeStyle = "#241f1c";
+    c.lineWidth = 1.5;
+    c.stroke();
+  }
+
+  if (px >= 2) {                              // route badge under the bus
+    c.font = "700 10px ui-monospace, monospace";
+    c.textAlign = "center";
+    const label = route.short;
+    const tw = c.measureText(label).width + 6;
+    c.fillStyle = "rgba(20,17,15,0.82)";
+    c.fillRect(-tw / 2, h / 2 + 4, tw, 12);
+    c.fillStyle = "#f4efe2";
+    c.fillText(label, 0, h / 2 + 13);
   }
   c.restore();
 }
 
 // --- Open / close -----------------------------------------------------
 function startPolling() {
-  stopPolling();
-  busTimer = setInterval(refreshBuses, BUS_POLL_MS);
-  timeTimer = setInterval(refreshTimes, TIME_POLL_MS);
+  if (!busTimer) busTimer = setInterval(refreshBuses, BUS_POLL_MS);
+  if (!timeTimer) timeTimer = setInterval(refreshTimes, TIME_POLL_MS);
 }
 
 function stopPolling() {
-  clearInterval(busTimer); clearInterval(timeTimer);
-  busTimer = timeTimer = null;
+  clearInterval(timeTimer);          // bus tracking keeps running
+  timeTimer = null;
 }
 
 export async function openTransit() {
@@ -351,9 +445,15 @@ export function toggleTransit() {
 
 export function isOpen() { return state.open; }
 
-export function initTransit(hooks, map) {
+export async function initTransit(hooks, map) {
   ctx = hooks;
   host = document.getElementById("transit");
   initProjection(map);
   render();
+  // Load and start tracking straight away: the stop and bus icons are
+  // part of the map, not part of the panel.
+  await loadData();
+  refreshBuses();
+  busTimer = setInterval(refreshBuses, BUS_POLL_MS);
+  ctx.requestDraw();
 }

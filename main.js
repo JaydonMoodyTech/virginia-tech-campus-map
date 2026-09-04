@@ -9,7 +9,9 @@ const TILE = 16;                 // source tile size in tiles.png
 // integer factor: a 16px tile cannot shrink to 6px without smearing its
 // pixels, and campus is 354x445 tiles, so these overview levels are the
 // only way the whole map ever fits on screen.
-const ZOOM_LEVELS = [0.25, 0.5, 1, 2, 4, 8, 16, 32, 64];
+// 0.125 exists because the grid grew to 1950x1391 for the Hethwood
+// routes: at 0.25 the map no longer fits a phone screen.
+const ZOOM_LEVELS = [0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64];
 const SPRITE_MIN = TILE;         // at or above this, use the spritesheet
 const LABEL_PAD = 3;             // px of slack when rejecting overlapping labels
 const CLICK_SLOP = 6;            // px of movement still counted as a click
@@ -56,6 +58,7 @@ let zoomIndex = 0;
 let map = null;
 let sheetReady = false;
 let variants = 1;                // tile variants across the spritesheet
+let gridIds = null;              // decoded tile ids, one byte per cell
 let mips = [];                   // overview pyramid, mips[0] = 1px/tile
 
 const camera = { x: 0, y: 0 };
@@ -71,6 +74,14 @@ sheet.src = "assets/tiles.png";
 
 function pxPerTile() { return ZOOM_LEVELS[zoomIndex]; }
 
+/** Unpack the base64 grid written by tools/build_grid.py. */
+function decodeGrid(b64, count) {
+  const bin = atob(b64);
+  const ids = new Uint8Array(count);
+  for (let i = 0; i < count; i++) ids[i] = bin.charCodeAt(i);
+  return ids;
+}
+
 // --- Overview pyramid -------------------------------------------------
 // The grid is 709x890 tiles, so even one screen pixel per tile does not
 // fit a phone. Each level halves the previous one, collapsing every 2x2
@@ -79,11 +90,7 @@ function pxPerTile() { return ZOOM_LEVELS[zoomIndex]; }
 // drawImage rather than ~630k fillRects.
 function buildMips() {
   let w = map.width, h = map.height;
-  let ids = new Uint8Array(w * h);
-  for (let r = 0, i = 0; r < h; r++) {
-    const row = map.grid[r];
-    for (let c = 0; c < w; c++) ids[i++] = row[c];
-  }
+  let ids = gridIds;
 
   mips = [];
   for (;;) {
@@ -224,9 +231,9 @@ function draw() {
   const r1 = Math.min(map.height - 1, Math.ceil((camera.y + window.innerHeight) / px));
 
   for (let r = r0; r <= r1; r++) {
-    const rowData = map.grid[r];
+    const rowBase = r * map.width;
     for (let c = c0; c <= c1; c++) {
-      const id = rowData[c];
+      const id = gridIds[rowBase + c];
       if (id === 0) continue;  // grass is the background; skip the blit
       ctx.drawImage(
         sheet,
@@ -486,6 +493,8 @@ async function loadMap() {
   const res = await fetch("data/campus.json");
   if (!res.ok) throw new Error("campus.json: " + res.status);
   map = await res.json();
+  gridIds = decodeGrid(map.grid, map.width * map.height);
+  map.grid = null;             // release the 3.6 MB source string
   buildMips();
   initTransit({ requestDraw: requestDraw, panTo: centreOn }, map);
   fitCampus();                 // open on the whole campus

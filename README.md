@@ -25,11 +25,22 @@ The tiles are generated, not hand-drawn: `tools/make_tiles.py` paints
 them procedurally in a Stardew-Valley palette.
 
 ## Live bus tracking
+Buses show on the map from the moment it loads: a little bus in its route
+colour, with a route badge and a red dot when it is near capacity,
+refreshed every 15s. Every stop those routes serve is marked with a bus-
+stop sign.
+
 Press **BUS** (or `B`) to open the Blacksburg Transit panel: pick one of
-23 routes, and its stops appear as a timeline in the route's own colour,
-each with the next expected departure and a countdown. The route shape,
-its stops and every bus currently running on it are drawn on the map, and
-clicking a stop flies there. Times refresh every 30s, vehicles every 15s.
+the five tracked routes -- Campus Shuttle (CAS), Hokie Express (HXP) and
+Hethwood A/B/Combined (HWA/HWB/HWC) -- and its stops appear as a timeline in the route's own
+colour, each with the next expected departure and a countdown. The route
+shape is drawn on the map and clicking a stop flies there. Times refresh
+every 30s.
+
+The map bbox covers VT campus plus the Hethwood corridor so these routes
+fit end to end -- 1950x1391 tiles at 2 m. The grid ships as base64-packed
+bytes rather than nested JSON arrays, which is the difference between
+3.6 MB and 6.8 MB with a multi-second parse.
 
 Route, stop and shape data is baked into `data/transit.json` at build
 time. Live times and vehicle positions come through `/api/bt` --

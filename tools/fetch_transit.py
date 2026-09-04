@@ -19,6 +19,10 @@ import build_grid  # reuse the exact projection the map grid was built with
 BASE = ("https://ridebt.org/index.php?option=com_ajax&module=bt_map"
         "&format=json&Itemid=101&method=")
 OUT_PATH = "data/transit.json"
+
+# The routes this map covers. The campus bbox in build_grid.py is sized to
+# hold these end to end -- widen both together if you add one.
+ROUTES = ["CAS", "HXP", "HWA", "HWB", "HWC"]
 USER_AGENT = "pixel-campus-map/0.1 (student project)"
 
 
@@ -72,6 +76,8 @@ def main():
     routes = []
     total_patterns = 0
     for route_id, entries in routes_raw.items():
+        if route_id not in ROUTES:
+            continue
         info = entries[0] if isinstance(entries, list) else entries
         patterns = []
         for name in by_route.get(route_id, []):
@@ -109,7 +115,7 @@ def main():
             "patterns": patterns,
         })
 
-    routes.sort(key=lambda r: r["name"])
+    routes.sort(key=lambda r: ROUTES.index(r["id"]))
 
     os.makedirs("data", exist_ok=True)
     with open(OUT_PATH, "w") as f:
@@ -124,7 +130,8 @@ def main():
                  if 0 <= s["col"] < build_grid.WIDTH and 0 <= s["row"] < build_grid.HEIGHT)
     size_kb = os.path.getsize(OUT_PATH) / 1000
     print(f"\nWrote {OUT_PATH} ({size_kb:.0f} KB)")
-    print(f"  {len(routes)} routes, {total_patterns} patterns")
+    print(f"  {len(routes)} routes ({', '.join(r['id'] for r in routes)}), "
+          f"{total_patterns} patterns")
     print(f"  {len(stops)} stops ({on_map} inside the campus grid)")
 
 

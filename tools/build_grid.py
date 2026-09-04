@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Project OSM geometry into an 8-bit tile grid."""
-import json, math, os
+import base64, json, math, os
 
 # --- Config -----------------------------------------------------------
-SOUTH, WEST, NORTH, EAST = 37.2200, -80.4290, 37.2360, -80.4130
+SOUTH, WEST, NORTH, EAST = 37.2110, -80.4570, 37.2360, -80.4130
 METERS_PER_TILE = 2.0
 
 IN_PATH = "raw/osm_dump.json"
@@ -357,7 +357,13 @@ def main():
             "height": HEIGHT,
             "tile_size_m": METERS_PER_TILE,
             "bbox": {"south": SOUTH, "west": WEST, "north": NORTH, "east": EAST},
-            "grid": grid,
+            # One byte per cell, base64'd. As nested JSON arrays this
+            # same grid is 6.8 MB and costs a multi-second parse; packed
+            # it is 3.6 MB of highly compressible text that decodes into
+            # a Uint8Array in one pass.
+            "encoding": "u8-base64",
+            "grid": base64.b64encode(
+                b"".join(bytes(row) for row in grid)).decode("ascii"),
             "labels": labels,
         }, f, separators=(",", ":"))
 

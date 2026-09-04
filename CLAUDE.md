@@ -19,6 +19,12 @@ in JavaScript.
   and would otherwise never fit on screen.
 - `ctx.imageSmoothingEnabled = false` everywhere. Non-negotiable.
 - Grid coordinates are (col, row) with row 0 at the NORTH edge.
+- The bbox covers VT campus plus the Hethwood corridor, sized to hold the
+  five tracked routes end to end. It is declared in BOTH tools/fetch_osm.py
+  and tools/build_grid.py -- change them together, then refetch and rebuild.
+- The grid ships as base64-packed bytes, one per cell ("encoding":
+  "u8-base64"), not nested JSON arrays: at 1950x1391 the array form is
+  6.8 MB and costs a multi-second parse.
 - The grid is 2 m per tile. Tile ids are defined once in
   tools/build_grid.py; tools/make_tiles.py and TILE_COLORS in main.js
   must be kept in the same order.
@@ -46,6 +52,9 @@ in JavaScript.
 - Refresh transit: `python3 tools/fetch_transit.py`
 
 ## Transit
+- Only the routes in ROUTES (tools/fetch_transit.py) are shipped: CAS,
+  HXP, HWA, HWB, HWC. Adding one may need a wider bbox -- check that its
+  stops land inside the grid, which fetch_transit reports.
 - BT's com_ajax endpoints are public and keyless but send no CORS header,
   so the browser cannot call them directly. `api/bt.js` (Vercel) and
   `tools/serve.py` (local) expose the same `/api/bt` contract -- change
