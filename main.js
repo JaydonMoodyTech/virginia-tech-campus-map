@@ -7,20 +7,39 @@ const TILE = 16;                 // source tile size in tiles.png
 // integer factor: a 16px tile cannot shrink to 6px without smearing its
 // pixels, and campus is 354x445 tiles, so these overview levels are the
 // only way the whole map ever fits on screen.
-const ZOOM_LEVELS = [1, 2, 3, 4, 6, 8, 12, 16, 32, 48, 64];
+const ZOOM_LEVELS = [0.25, 0.5, 1, 2, 4, 8, 16, 32, 64];
 const SPRITE_MIN = TILE;         // at or above this, use the spritesheet
 const LABEL_MIN = 32;            // px/tile before building labels appear
 const CLICK_SLOP = 6;            // px of movement still counted as a click
 const PAN_MS = 320;              // click-to-centre glide
 
 const VOID_COLOR = "#1a1c2c";    // outside the map bounds
-const GRASS_COLOR = "#4a7a3a";   // tile 0, painted as one rect not blitted
+const GRASS_COLOR = "#70a44c";   // tile 0, painted as one rect not blitted
 
-// Must match the base colours in tools/make_placeholder_tiles.py.
+// Base colour of each tile, for the zoomed-out overview. Must match the
+// palette in tools/make_tiles.py, and the order must match the tile ids
+// in tools/build_grid.py.
 const TILE_COLORS = [
-  [74, 122, 58], [194, 168, 120], [107, 107, 107],
-  [143, 74, 58], [58, 110, 165], [46, 84, 46],
+  [112, 164, 76],   //  0 grass
+  [178, 140, 96],   //  1 path
+  [110, 108, 112],  //  2 road
+  [170, 92, 64],    //  3 building
+  [72, 140, 196],   //  4 water
+  [56, 102, 48],    //  5 tree
+  [104, 54, 38],    //  6 roof_edge
+  [178, 174, 162],  //  7 plaza
+  [96, 94, 100],    //  8 parking
+  [132, 182, 90],   //  9 lawn
+  [104, 158, 70],   // 10 pitch
+  [126, 172, 84],   // 11 garden
+  [178, 174, 162],  // 12 steps
+  [52, 94, 46],     // 13 hedge
 ];
+
+// Mirrors PRECEDENCE in tools/build_grid.py. Used when shrinking the
+// overview: a 2x2 block collapses to its most important tile, so roads
+// and buildings survive at low zoom instead of dissolving into grass.
+const TILE_PRECEDENCE = [0, 9, 11, 12, 4, 5, 13, 8, 7, 1, 2, 3, 10, 6];
 
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
@@ -28,37 +47,84 @@ const ctx = canvas.getContext("2d");
 let zoomIndex = 0;
 let map = null;
 let sheetReady = false;
-let overview = null;             // offscreen canvas, 1 px per tile
+let variants = 1;                // tile variants across the spritesheet
+let mips = [];                   // overview pyramid, mips[0] = 1px/tile
 
 const camera = { x: 0, y: 0 };
 const sheet = new Image();
 
-sheet.onload = () => { sheetReady = true; requestDraw(); };
+sheet.onload = () => {
+  sheetReady = true;
+  variants = Math.max(1, Math.floor(sheet.width / TILE));
+  requestDraw();
+};
 sheet.onerror = () => console.error("Failed to load assets/tiles.png");
 sheet.src = "assets/tiles.png";
 
 function pxPerTile() { return ZOOM_LEVELS[zoomIndex]; }
 
-// --- Overview bitmap --------------------------------------------------
-// One pixel per tile, built once. Scaling this up is a single drawImage
-// instead of ~158k fillRects, which is what keeps the zoomed-out view
-// cheap enough to pan smoothly.
-function buildOverview() {
-  overview = document.createElement("canvas");
-  overview.width = map.width;
-  overview.height = map.height;
-  const octx = overview.getContext("2d");
-  const img = octx.createImageData(map.width, map.height);
-  const d = img.data;
-  let i = 0;
-  for (let r = 0; r < map.height; r++) {
+// --- Overview pyramid -------------------------------------------------
+// The grid is 709x890 tiles, so even one screen pixel per tile does not
+// fit a phone. Each level halves the previous one, collapsing every 2x2
+// block to its highest-precedence tile so roads and buildings stay
+// visible instead of averaging away into grass. Drawing a level is one
+// drawImage rather than ~630k fillRects.
+function buildMips() {
+  let w = map.width, h = map.height;
+  let ids = new Uint8Array(w * h);
+  for (let r = 0, i = 0; r < h; r++) {
     const row = map.grid[r];
-    for (let c = 0; c < map.width; c++) {
-      const rgb = TILE_COLORS[row[c]] || TILE_COLORS[0];
-      d[i++] = rgb[0]; d[i++] = rgb[1]; d[i++] = rgb[2]; d[i++] = 255;
-    }
+    for (let c = 0; c < w; c++) ids[i++] = row[c];
   }
-  octx.putImageData(img, 0, 0);
+
+  mips = [];
+  for (;;) {
+    mips.push(renderIds(ids, w, h));
+    if (w <= 64 || h <= 64) break;
+    const w2 = Math.max(1, w >> 1), h2 = Math.max(1, h >> 1);
+    const next = new Uint8Array(w2 * h2);
+    for (let r = 0; r < h2; r++) {
+      for (let c = 0; c < w2; c++) {
+        let best = ids[(r * 2) * w + c * 2];
+        for (const [dc, dr] of [[1, 0], [0, 1], [1, 1]]) {
+          const sc = c * 2 + dc, sr = r * 2 + dr;
+          if (sc >= w || sr >= h) continue;
+          const id = ids[sr * w + sc];
+          if (TILE_PRECEDENCE[id] > TILE_PRECEDENCE[best]) best = id;
+        }
+        next[r * w2 + c] = best;
+      }
+    }
+    ids = next; w = w2; h = h2;
+  }
+}
+
+function renderIds(ids, w, h) {
+  const cv = document.createElement("canvas");
+  cv.width = w; cv.height = h;
+  const c2 = cv.getContext("2d");
+  const img = c2.createImageData(w, h);
+  const d = img.data;
+  for (let i = 0, j = 0; i < ids.length; i++) {
+    const rgb = TILE_COLORS[ids[i]] || TILE_COLORS[0];
+    d[j++] = rgb[0]; d[j++] = rgb[1]; d[j++] = rgb[2]; d[j++] = 255;
+  }
+  c2.putImageData(img, 0, 0);
+  return { canvas: cv, w: w, h: h };
+}
+
+/** Pick the mip whose natural size is closest at or above `px` per tile. */
+function mipFor(px) {
+  let level = 0, scale = px;
+  while (scale < 1 && level < mips.length - 1) { level++; scale *= 2; }
+  return { mip: mips[level], scale: scale };
+}
+
+// Deterministic per-cell variant, so grass and roofs do not visibly tile.
+function variantFor(col, row) {
+  let h = (col * 73856093) ^ (row * 19349663);
+  h ^= h >>> 13;
+  return (h >>> 0) % variants;
 }
 
 // --- Camera -----------------------------------------------------------
@@ -126,7 +192,10 @@ function draw() {
   const oy = Math.round(-camera.y);
 
   if (px < SPRITE_MIN) {
-    if (overview) ctx.drawImage(overview, ox, oy, map.width * px, map.height * px);
+    if (!mips.length) return;
+    const sel = mipFor(px);
+    ctx.drawImage(sel.mip.canvas, ox, oy,
+                  sel.mip.w * sel.scale, sel.mip.h * sel.scale);
     return;
   }
 
@@ -151,7 +220,7 @@ function draw() {
       if (id === 0) continue;  // grass is the background; skip the blit
       ctx.drawImage(
         sheet,
-        id * TILE, 0, TILE, TILE,
+        variantFor(c, r) * TILE, id * TILE, TILE, TILE,
         Math.round(c * px - camera.x),
         Math.round(r * px - camera.y),
         px, px
@@ -356,7 +425,7 @@ async function loadMap() {
   const res = await fetch("data/campus.json");
   if (!res.ok) throw new Error("campus.json: " + res.status);
   map = await res.json();
-  buildOverview();
+  buildMips();
   fitCampus();                 // open on the whole campus
 }
 

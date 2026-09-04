@@ -19,14 +19,26 @@ in JavaScript.
   and would otherwise never fit on screen.
 - `ctx.imageSmoothingEnabled = false` everywhere. Non-negotiable.
 - Grid coordinates are (col, row) with row 0 at the NORTH edge.
+- The grid is 2 m per tile. Tile ids are defined once in
+  tools/build_grid.py; tools/make_tiles.py and TILE_COLORS in main.js
+  must be kept in the same order.
+- Spritesheet layout is row = tile id, column = variant. The renderer
+  picks a variant per cell by hashing (col, row) so large areas do not
+  visibly repeat.
+- Art direction is Stardew Valley: warm desaturated palette, three
+  shades per material, hand-placed detail over noise, dark warm outlines
+  on objects but never on ground.
 - Constants in SCREAMING_SNAKE at the top of each file.
 
 ## Commands
-- Local server: `python3 -m http.server 8000`
+- Local server: `python3 tools/serve.py 8000` (sends no-store;
+  plain http.server caches main.js and campus.json and will silently
+  render a stale grid after a rebuild)
 - Controls: drag pans, click travels + zooms in, right-click zooms out,
   wheel/pinch zooms, `+` `-` `F`/`0` keys, and the on-screen buttons.
-- Refetch OSM: `python3 tools/fetch_osm.py`
+- Refetch OSM: `python3 tools/fetch_osm.py --force`
 - Rebuild grid: `python3 tools/build_grid.py`
+- Redraw tiles: `python3 tools/make_tiles.py`
 
 ## Never
 - Commit anything in `raw/` (large API dumps).

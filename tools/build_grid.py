@@ -4,20 +4,42 @@ import json, math, os
 
 # --- Config -----------------------------------------------------------
 SOUTH, WEST, NORTH, EAST = 37.2200, -80.4290, 37.2360, -80.4130
-METERS_PER_TILE = 4.0
+METERS_PER_TILE = 2.0
 
 IN_PATH = "raw/osm_dump.json"
 OUT_PATH = "data/campus.json"
 
-GRASS, PATH, ROAD, BUILDING, WATER, TREE = 0, 1, 2, 3, 4, 5
+# Tile ids. Must stay in sync with tools/make_tiles.py and TILE_COLORS
+# in main.js.
+GRASS, PATH, ROAD, BUILDING, WATER, TREE, ROOF_EDGE = 0, 1, 2, 3, 4, 5, 6
+PLAZA, PARKING, LAWN, PITCH, GARDEN, STEPS, HEDGE = 7, 8, 9, 10, 11, 12, 13
+
+TILE_NAMES = {
+    GRASS: "grass", PATH: "path", ROAD: "road", BUILDING: "building",
+    WATER: "water", TREE: "tree", ROOF_EDGE: "roof_edge", PLAZA: "plaza",
+    PARKING: "parking", LAWN: "lawn", PITCH: "pitch", GARDEN: "garden",
+    STEPS: "steps", HEDGE: "hedge",
+}
 
 # Higher wins when two features claim the same cell.
-PRECEDENCE = {GRASS: 0, WATER: 1, TREE: 2, PATH: 3, ROAD: 4, BUILDING: 5}
+PRECEDENCE = {
+    GRASS: 0, LAWN: 1, PITCH: 2, GARDEN: 3, WATER: 4, TREE: 5, HEDGE: 6,
+    PARKING: 7, PLAZA: 8, PATH: 9, STEPS: 10, ROAD: 11, BUILDING: 12,
+    ROOF_EDGE: 13,
+}
 
 EARTH_RADIUS = 6378137.0  # WGS84 semi-major axis, metres
 
-ROAD_TAGS = {"service", "residential", "tertiary", "secondary", "primary"}
-PATH_TAGS = {"footway", "path", "pedestrian", "steps"}
+# Stroke width in cells, by highway value. At 2 m per tile these are
+# roughly true to the ground: a service road is ~4 m, an arterial ~10 m.
+ROAD_WIDTHS = {
+    "primary": 5, "primary_link": 4, "secondary": 4, "secondary_link": 3,
+    "tertiary": 4, "tertiary_link": 3, "residential": 3, "service": 2,
+    "track": 2,
+}
+PATH_WIDTHS = {
+    "pedestrian": 3, "footway": 2, "path": 1, "cycleway": 2, "steps": 2,
+}
 
 
 # --- Web Mercator (EPSG:3857) ----------------------------------------
@@ -105,14 +127,24 @@ def bresenham(c0, r0, c1, r1):
     return cells
 
 
-def stroke_line_string(grid, pts, tile_id, thickness=1):
+def stroke_line_string(grid, pts, tile_id, width=1):
+    """Stroke a polyline `width` cells across."""
+    lo, hi = -(width // 2), (width + 1) // 2
     for i in range(len(pts) - 1):
         c0, r0 = int(pts[i][0]), int(pts[i][1])
         c1, r1 = int(pts[i + 1][0]), int(pts[i + 1][1])
         for col, row in bresenham(c0, r0, c1, r1):
-            for dc in range(-(thickness // 2), thickness // 2 + 1):
-                for dr in range(-(thickness // 2), thickness // 2 + 1):
+            for dc in range(lo, hi):
+                for dr in range(lo, hi):
                     paint(grid, col + dc, row + dr, tile_id)
+
+
+def stamp_disc(grid, col, row, radius, tile_id):
+    """Paint a filled disc -- used for individual mapped trees."""
+    for dr in range(-radius, radius + 1):
+        for dc in range(-radius, radius + 1):
+            if dc * dc + dr * dr <= radius * radius + 1:
+                paint(grid, col + dc, row + dr, tile_id)
 
 
 def paint(grid, col, row, tile_id):
@@ -121,20 +153,67 @@ def paint(grid, col, row, tile_id):
             grid[row][col] = tile_id
 
 
+def outline_buildings(grid):
+    """Convert the outer ring of each building to ROOF_EDGE.
+
+    Stardew's structures read as solid because every roof carries a dark
+    border. Doing it here as a post-pass means the renderer stays a dumb
+    blitter and the border never breaks across chunk seams.
+    """
+    edges = []
+    for row in range(HEIGHT):
+        line = grid[row]
+        for col in range(WIDTH):
+            if line[col] != BUILDING:
+                continue
+            for dc, dr in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                c, r = col + dc, row + dr
+                if not (0 <= c < WIDTH and 0 <= r < HEIGHT) or \
+                        grid[r][c] not in (BUILDING, ROOF_EDGE):
+                    edges.append((col, row))
+                    break
+    for col, row in edges:
+        grid[row][col] = ROOF_EDGE
+    return len(edges)
+
+
 # --- Classification ---------------------------------------------------
 def classify(tags):
-    """Return (tile_id, is_area) or None to skip."""
+    """Return (tile_id, is_area, width) or None to skip."""
     if "building" in tags:
-        return BUILDING, True
-    if tags.get("natural") == "water" or tags.get("waterway"):
-        return WATER, True
-    if tags.get("leisure") in ("park", "pitch", "garden"):
-        return TREE, True
+        return BUILDING, True, 0
+
+    natural = tags.get("natural")
+    if natural == "water" or natural == "wetland" or "waterway" in tags:
+        is_area = natural in ("water", "wetland")
+        return WATER, is_area, 2
+    if natural in ("wood", "scrub") or tags.get("landuse") == "forest":
+        return TREE, True, 0
+
+    leisure = tags.get("leisure")
+    if leisure in ("pitch", "track"):
+        return PITCH, True, 0
+    if leisure in ("park", "playground"):
+        return LAWN, True, 0          # the Drillfield and the quads
+    if leisure == "garden":
+        return GARDEN, True, 0
+
+    if tags.get("landuse") in ("grass", "meadow", "recreation_ground", "farmland"):
+        return LAWN, True, 0
+    if tags.get("amenity") == "parking":
+        return PARKING, True, 0
+    if tags.get("barrier") in ("hedge", "fence", "wall"):
+        return HEDGE, False, 1
+
     hw = tags.get("highway")
-    if hw in PATH_TAGS:
-        return PATH, False
-    if hw in ROAD_TAGS:
-        return ROAD, False
+    if hw == "steps":
+        return STEPS, False, PATH_WIDTHS["steps"]
+    if hw == "pedestrian":
+        return PLAZA, False, PATH_WIDTHS["pedestrian"]
+    if hw in PATH_WIDTHS:
+        return PATH, False, PATH_WIDTHS[hw]
+    if hw in ROAD_WIDTHS:
+        return ROAD, False, ROAD_WIDTHS[hw]
     return None
 
 
@@ -146,15 +225,20 @@ def main():
     grid = [[GRASS] * WIDTH for _ in range(HEIGHT)]
     labels = []
     counts = {}
+    trees = 0
 
-    for el in data.get("elements", []):
+    elements = data.get("elements", [])
+
+    # Ways first, then tree nodes on top, so a tree beside a path still
+    # shows rather than being buried by the path stroke.
+    for el in elements:
         if el.get("type") != "way" or "geometry" not in el:
             continue
         tags = el.get("tags", {})
         result = classify(tags)
         if not result:
             continue
-        tile_id, is_area = result
+        tile_id, is_area, width = result
 
         pts = [lonlat_to_cell(n["lon"], n["lat"]) for n in el["geometry"]]
         if not pts:
@@ -163,8 +247,7 @@ def main():
         if is_area:
             fill_polygon(grid, pts, tile_id)
         else:
-            thickness = 2 if tile_id == ROAD else 1
-            stroke_line_string(grid, pts, tile_id, thickness)
+            stroke_line_string(grid, pts, tile_id, width)
 
         counts[tile_id] = counts.get(tile_id, 0) + 1
 
@@ -175,6 +258,15 @@ def main():
                 "col": int(sum(p[0] for p in pts) / len(pts)),
                 "row": int(sum(p[1] for p in pts) / len(pts)),
             })
+
+    for el in elements:
+        if el.get("type") != "node" or el.get("tags", {}).get("natural") != "tree":
+            continue
+        col, row = lonlat_to_cell(el["lon"], el["lat"])
+        stamp_disc(grid, int(col), int(row), 2, TREE)   # ~8 m canopy
+        trees += 1
+
+    edge_cells = outline_buildings(grid)
 
     os.makedirs("data", exist_ok=True)
     with open(OUT_PATH, "w") as f:
@@ -187,13 +279,16 @@ def main():
             "labels": labels,
         }, f, separators=(",", ":"))
 
+    size_mb = os.path.getsize(OUT_PATH) / 1e6
     print(f"Grid: {WIDTH}x{HEIGHT} @ {METERS_PER_TILE}m/tile")
-    print(f"Features: {counts}")
-    print(f"Labels: {len(labels)}")
-    print(f"Wrote {OUT_PATH}")
+    print(f"Ways: " + ", ".join(f"{TILE_NAMES[k]}={v}" for k, v in sorted(counts.items())))
+    print(f"Trees: {trees}   Roof-edge cells: {edge_cells}   Labels: {len(labels)}")
+    print(f"Wrote {OUT_PATH} ({size_mb:.2f} MB)")
 
-    # ASCII sanity dump — verify BEFORE trying to render.
-    chars = {GRASS: ".", PATH: "-", ROAD: "=", BUILDING: "#", WATER: "~", TREE: "*"}
+    # ASCII sanity dump -- verify BEFORE trying to render.
+    chars = {GRASS: ".", PATH: "-", ROAD: "=", BUILDING: "#", WATER: "~",
+             TREE: "*", ROOF_EDGE: "@", PLAZA: "+", PARKING: "P", LAWN: ",",
+             PITCH: "\"", GARDEN: "%", STEPS: "s", HEDGE: "h"}
     step = max(1, WIDTH // 100)
     print("\n--- preview ---")
     for row in range(0, HEIGHT, step * 2):
