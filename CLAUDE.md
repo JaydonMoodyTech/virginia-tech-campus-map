@@ -22,9 +22,13 @@ in JavaScript.
 - The grid is 2 m per tile. Tile ids are defined once in
   tools/build_grid.py; tools/make_tiles.py and TILE_COLORS in main.js
   must be kept in the same order.
-- Spritesheet layout is row = tile id, column = variant. The renderer
-  picks a variant per cell by hashing (col, row) so large areas do not
-  visibly repeat.
+- Spritesheet layout is row = tile id, column = variant (19 x 8). The
+  renderer picks a variant per cell by hashing (col, row) so large areas
+  do not visibly repeat. Keep variants >= 8: at 4, every cell sharing a
+  variant carried an identically placed skylight and the repeat read as
+  a visible lattice.
+- Buildings come in three roof palettes, chosen per building in
+  build_grid.py, each with its own matching eave tile.
 - Art direction is Stardew Valley: warm desaturated palette, three
   shades per material, hand-placed detail over noise, dark warm outlines
   on objects but never on ground.
@@ -39,6 +43,17 @@ in JavaScript.
 - Refetch OSM: `python3 tools/fetch_osm.py --force`
 - Rebuild grid: `python3 tools/build_grid.py`
 - Redraw tiles: `python3 tools/make_tiles.py`
+- Refresh transit: `python3 tools/fetch_transit.py`
+
+## Transit
+- BT's com_ajax endpoints are public and keyless but send no CORS header,
+  so the browser cannot call them directly. `api/bt.js` (Vercel) and
+  `tools/serve.py` (local) expose the same `/api/bt` contract -- change
+  one, change the other.
+- Static route/stop/shape data is baked into `data/transit.json` at build
+  time so the panel works before any live call returns.
+- `getNextDeparturesForStop` only answers a POST. A GET returns an empty
+  list with HTTP 200, which looks like "no service" rather than an error.
 
 ## Never
 - Commit anything in `raw/` (large API dumps).

@@ -13,12 +13,27 @@ OUT_PATH = "data/campus.json"
 # in main.js.
 GRASS, PATH, ROAD, BUILDING, WATER, TREE, ROOF_EDGE = 0, 1, 2, 3, 4, 5, 6
 PLAZA, PARKING, LAWN, PITCH, GARDEN, STEPS, HEDGE = 7, 8, 9, 10, 11, 12, 13
+# Appended rather than renumbered, so existing ids keep their meaning.
+BUILDING_B, BUILDING_C, EDGE_B, EDGE_C, PARKING_STALL = 14, 15, 16, 17, 18
+
+# Three roof palettes, picked per building so a campus block is not one
+# flat sheet of the same red. The choice is stable across rebuilds.
+ROOF_STYLES = [BUILDING, BUILDING_B, BUILDING_C]
+EDGE_FOR = {BUILDING: ROOF_EDGE, BUILDING_B: EDGE_B, BUILDING_C: EDGE_C}
+BUILDINGS = set(EDGE_FOR)
+EDGES = set(EDGE_FOR.values())
+
+# Parking is laid out in bands: STALL_DEPTH rows of marked bays, then the
+# same again of clear aisle, which is what a real lot looks like from above.
+STALL_DEPTH = 3
 
 TILE_NAMES = {
     GRASS: "grass", PATH: "path", ROAD: "road", BUILDING: "building",
     WATER: "water", TREE: "tree", ROOF_EDGE: "roof_edge", PLAZA: "plaza",
     PARKING: "parking", LAWN: "lawn", PITCH: "pitch", GARDEN: "garden",
-    STEPS: "steps", HEDGE: "hedge",
+    STEPS: "steps", HEDGE: "hedge", BUILDING_B: "building_b",
+    BUILDING_C: "building_c", EDGE_B: "edge_b", EDGE_C: "edge_c",
+    PARKING_STALL: "parking_stall",
 }
 
 # Higher wins when two features claim the same cell.
@@ -26,7 +41,12 @@ PRECEDENCE = {
     GRASS: 0, LAWN: 1, PITCH: 2, GARDEN: 3, WATER: 4, TREE: 5, HEDGE: 6,
     PARKING: 7, PLAZA: 8, PATH: 9, STEPS: 10, ROAD: 11, BUILDING: 12,
     ROOF_EDGE: 13,
+    BUILDING_B: 12, BUILDING_C: 12, EDGE_B: 13, EDGE_C: 13,
+    PARKING_STALL: 7,
 }
+
+LABEL_KINDS = {BUILDING: "building", LAWN: "park", WATER: "water",
+               PITCH: "field", GARDEN: "garden"}
 
 EARTH_RADIUS = 6378137.0  # WGS84 semi-major axis, metres
 
@@ -37,6 +57,13 @@ ROAD_WIDTHS = {
     "tertiary": 4, "tertiary_link": 3, "residential": 3, "service": 2,
     "track": 2,
 }
+# Which filled areas get a name label, and what to call that kind.
+LABELLED = LABEL_KINDS
+
+# Label tiers by footprint rank: the biggest TIER_LARGE features show at
+# the overview, the next TIER_MEDIUM once mid-zoomed, the rest up close.
+TIER_LARGE, TIER_MEDIUM = 18, 70
+
 PATH_WIDTHS = {
     "pedestrian": 3, "footway": 2, "path": 1, "cycleway": 2, "steps": 2,
 }
@@ -147,6 +174,17 @@ def stamp_disc(grid, col, row, radius, tile_id):
                 paint(grid, col + dc, row + dr, tile_id)
 
 
+def polygon_area(pts):
+    """Shoelace area in cells. Used to rank how prominent a label is."""
+    total = 0.0
+    n = len(pts)
+    for i in range(n):
+        c0, r0 = pts[i]
+        c1, r1 = pts[(i + 1) % n]
+        total += c0 * r1 - c1 * r0
+    return abs(total) / 2.0
+
+
 def paint(grid, col, row, tile_id):
     if 0 <= col < WIDTH and 0 <= row < HEIGHT:
         if PRECEDENCE[tile_id] >= PRECEDENCE[grid[row][col]]:
@@ -154,27 +192,49 @@ def paint(grid, col, row, tile_id):
 
 
 def outline_buildings(grid):
-    """Convert the outer ring of each building to ROOF_EDGE.
+    """Convert the outer ring of each building to its matching eave.
 
     Stardew's structures read as solid because every roof carries a dark
     border. Doing it here as a post-pass means the renderer stays a dumb
-    blitter and the border never breaks across chunk seams.
+    blitter and the border never breaks across chunk seams. Each roof
+    style keeps its own eave so the border matches the roof it rings.
     """
     edges = []
     for row in range(HEIGHT):
         line = grid[row]
         for col in range(WIDTH):
-            if line[col] != BUILDING:
+            style = line[col]
+            if style not in BUILDINGS:
                 continue
             for dc, dr in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 c, r = col + dc, row + dr
-                if not (0 <= c < WIDTH and 0 <= r < HEIGHT) or \
-                        grid[r][c] not in (BUILDING, ROOF_EDGE):
-                    edges.append((col, row))
+                inside = (0 <= c < WIDTH and 0 <= r < HEIGHT and
+                          (grid[r][c] in BUILDINGS or grid[r][c] in EDGES))
+                if not inside:
+                    edges.append((col, row, EDGE_FOR[style]))
                     break
-    for col, row in edges:
-        grid[row][col] = ROOF_EDGE
+    for col, row, edge in edges:
+        grid[row][col] = edge
     return len(edges)
+
+
+def stripe_parking(grid):
+    """Turn flat asphalt into alternating parking bays and driving aisles.
+
+    Bay orientation is not in the OSM data, so deriving the bands from the
+    row index is the honest approximation: it gives a lot the striped
+    rhythm you see from above without inventing a layout per lot.
+    """
+    n = 0
+    for row in range(HEIGHT):
+        if (row // STALL_DEPTH) % 2:
+            continue                      # this band is the driving aisle
+        line = grid[row]
+        for col in range(WIDTH):
+            if line[col] == PARKING:
+                line[col] = PARKING_STALL
+                n += 1
+    return n
 
 
 # --- Classification ---------------------------------------------------
@@ -244,6 +304,10 @@ def main():
         if not pts:
             continue
 
+        if tile_id == BUILDING:
+            key = tags.get("name") or str(el.get("id", len(labels)))
+            tile_id = ROOF_STYLES[hash(key) % len(ROOF_STYLES)]
+
         if is_area:
             fill_polygon(grid, pts, tile_id)
         else:
@@ -252,11 +316,15 @@ def main():
         counts[tile_id] = counts.get(tile_id, 0) + 1
 
         name = tags.get("name")
-        if name and tile_id == BUILDING:
+        if tile_id in BUILDINGS:
+            tile_id = BUILDING          # one label kind for all roof styles
+        if name and is_area and tile_id in LABELLED:
             labels.append({
                 "name": name,
                 "col": int(sum(p[0] for p in pts) / len(pts)),
                 "row": int(sum(p[1] for p in pts) / len(pts)),
+                "kind": LABELLED[tile_id],
+                "area": round(polygon_area(pts)),
             })
 
     for el in elements:
@@ -266,7 +334,21 @@ def main():
         stamp_disc(grid, int(col), int(row), 2, TREE)   # ~8 m canopy
         trees += 1
 
+    # Rank labels by footprint and bucket them into zoom tiers, so the
+    # Drillfield and Burruss are readable from the whole-campus view while
+    # a 200 sq m annex only appears once you are close enough to care.
+    labels.sort(key=lambda l: -l["area"])
+    for rank, lab in enumerate(labels):
+        if rank < TIER_LARGE:
+            lab["minPx"] = 2          # visible from the overview
+        elif rank < TIER_MEDIUM:
+            lab["minPx"] = 8
+        else:
+            lab["minPx"] = 16         # only once zoomed right in
+        del lab["area"]
+
     edge_cells = outline_buildings(grid)
+    stall_cells = stripe_parking(grid)
 
     os.makedirs("data", exist_ok=True)
     with open(OUT_PATH, "w") as f:
@@ -282,13 +364,16 @@ def main():
     size_mb = os.path.getsize(OUT_PATH) / 1e6
     print(f"Grid: {WIDTH}x{HEIGHT} @ {METERS_PER_TILE}m/tile")
     print(f"Ways: " + ", ".join(f"{TILE_NAMES[k]}={v}" for k, v in sorted(counts.items())))
-    print(f"Trees: {trees}   Roof-edge cells: {edge_cells}   Labels: {len(labels)}")
+    print(f"Trees: {trees}   Roof-edge cells: {edge_cells}   "
+          f"Stall cells: {stall_cells}   Labels: {len(labels)}")
     print(f"Wrote {OUT_PATH} ({size_mb:.2f} MB)")
 
     # ASCII sanity dump -- verify BEFORE trying to render.
     chars = {GRASS: ".", PATH: "-", ROAD: "=", BUILDING: "#", WATER: "~",
              TREE: "*", ROOF_EDGE: "@", PLAZA: "+", PARKING: "P", LAWN: ",",
-             PITCH: "\"", GARDEN: "%", STEPS: "s", HEDGE: "h"}
+             PITCH: "\"", GARDEN: "%", STEPS: "s", HEDGE: "h",
+             BUILDING_B: "#", BUILDING_C: "#", EDGE_B: "@", EDGE_C: "@",
+             PARKING_STALL: "p"}
     step = max(1, WIDTH // 100)
     print("\n--- preview ---")
     for row in range(0, HEIGHT, step * 2):

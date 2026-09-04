@@ -1,3 +1,5 @@
+import { initTransit, drawTransit, toggleTransit, isOpen as transitOpen } from "./transit.js";
+
 // --- Constants --------------------------------------------------------
 const TILE = 16;                 // source tile size in tiles.png
 
@@ -9,7 +11,7 @@ const TILE = 16;                 // source tile size in tiles.png
 // only way the whole map ever fits on screen.
 const ZOOM_LEVELS = [0.25, 0.5, 1, 2, 4, 8, 16, 32, 64];
 const SPRITE_MIN = TILE;         // at or above this, use the spritesheet
-const LABEL_MIN = 32;            // px/tile before building labels appear
+const LABEL_PAD = 3;             // px of slack when rejecting overlapping labels
 const CLICK_SLOP = 6;            // px of movement still counted as a click
 const PAN_MS = 320;              // click-to-centre glide
 
@@ -34,12 +36,18 @@ const TILE_COLORS = [
   [126, 172, 84],   // 11 garden
   [178, 174, 162],  // 12 steps
   [52, 94, 46],     // 13 hedge
+  [104, 116, 132],  // 14 building_b  (slate roof)
+  [150, 120, 78],   // 15 building_c  (weathered roof)
+  [58, 66, 80],     // 16 edge_b
+  [92, 72, 44],     // 17 edge_c
+  [104, 102, 108],  // 18 parking_stall
 ];
 
 // Mirrors PRECEDENCE in tools/build_grid.py. Used when shrinking the
 // overview: a 2x2 block collapses to its most important tile, so roads
 // and buildings survive at low zoom instead of dissolving into grass.
-const TILE_PRECEDENCE = [0, 9, 11, 12, 4, 5, 13, 8, 7, 1, 2, 3, 10, 6];
+const TILE_PRECEDENCE = [0, 9, 11, 12, 4, 5, 13, 8, 7, 1, 2, 3, 10, 6,
+                         12, 12, 13, 13, 7];
 
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
@@ -196,6 +204,8 @@ function draw() {
     const sel = mipFor(px);
     ctx.drawImage(sel.mip.canvas, ox, oy,
                   sel.mip.w * sel.scale, sel.mip.h * sel.scale);
+    drawTransit(ctx, px, camera);
+    drawLabels(px);
     return;
   }
 
@@ -228,24 +238,57 @@ function draw() {
     }
   }
 
+  drawTransit(ctx, px, camera);
   drawLabels(px);
 }
 
 function drawLabels(px) {
-  if (px < LABEL_MIN) return;
-  ctx.font = Math.max(10, Math.round(px / 4)) + "px ui-monospace, monospace";
+  // Two filters keep this readable. Each label carries a minPx from
+  // tools/build_grid.py, ranked by footprint, so the Drillfield and
+  // Burruss survive to the overview while a small annex only appears up
+  // close. Whatever passes that is then placed greedily, largest first,
+  // and anything overlapping an already-placed box is dropped -- without
+  // it, dense blocks like the Upper Quad turn into a smear.
+  const boxes = [];
   ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+
   for (const lab of map.labels) {
+    if (px < lab.minPx) continue;
     const x = lab.col * px - camera.x;
     const y = lab.row * px - camera.y;
-    if (x < -100 || x > window.innerWidth + 100) continue;
+    if (x < -120 || x > window.innerWidth + 120) continue;
     if (y < -40 || y > window.innerHeight + 40) continue;
-    ctx.fillStyle = "rgba(0,0,0,0.7)";
-    const w = ctx.measureText(lab.name).width + 8;
-    ctx.fillRect(x - w / 2, y - 12, w, 15);
-    ctx.fillStyle = "#f4f4f4";
-    ctx.fillText(lab.name, x, y);
+
+    const size = lab.minPx <= 2 ? 13 : lab.minPx <= 8 ? 12 : 11;
+    ctx.font = `600 ${size}px ui-sans-serif, system-ui, sans-serif`;
+    const w = ctx.measureText(lab.name).width + 10;
+    const h = size + 6;
+    const box = [x - w / 2, y - h, x + w / 2, y];
+    if (boxes.some(b => overlaps(b, box))) continue;
+    boxes.push(box);
+
+    ctx.fillStyle = lab.kind === "building" ? "rgba(28,22,20,0.78)" : "rgba(28,44,22,0.72)";
+    roundRect(ctx, box[0], box[1], w, h, 3);
+    ctx.fill();
+    ctx.fillStyle = "#f4efe2";
+    ctx.fillText(lab.name, x, y - 5);
   }
+}
+
+function overlaps(a, b) {
+  return !(a[2] + LABEL_PAD < b[0] || a[0] - LABEL_PAD > b[2] ||
+           a[3] + LABEL_PAD < b[1] || a[1] - LABEL_PAD > b[3]);
+}
+
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
 }
 
 // --- Navigation -------------------------------------------------------
@@ -293,6 +336,18 @@ function zoomAt(steps, focusX, focusY) {
   clampCamera();
   requestDraw();
   updateControls();
+}
+
+/** Centre the view on a grid cell, zooming in enough to be useful. */
+function centreOn(col, row) {
+  if (!map) return;
+  if (pxPerTile() < 8) zoomIndex = ZOOM_LEVELS.indexOf(8);
+  const px = pxPerTile();
+  updateControls();
+  glideTo(
+    clampAxis(col * px - window.innerWidth / 2, map.width * px, window.innerWidth),
+    clampAxis(row * px - window.innerHeight / 2, map.height * px, window.innerHeight)
+  );
 }
 
 // Click: travel to that part of campus and move one step closer.
@@ -399,6 +454,7 @@ function touchDistance(touches) {
 const btnIn = document.getElementById("zoom-in");
 const btnOut = document.getElementById("zoom-out");
 const btnFit = document.getElementById("fit");
+const btnBus = document.getElementById("bus");
 
 function updateControls() {
   if (!btnIn || !map) return;
@@ -413,11 +469,16 @@ function centreY() { return window.innerHeight / 2; }
 if (btnIn) btnIn.addEventListener("click", function () { zoomAt(1, centreX(), centreY()); });
 if (btnOut) btnOut.addEventListener("click", function () { zoomAt(-1, centreX(), centreY()); });
 if (btnFit) btnFit.addEventListener("click", fitCampus);
+if (btnBus) btnBus.addEventListener("click", () => {
+  toggleTransit();
+  btnBus.classList.toggle("is-on", transitOpen());
+});
 
 window.addEventListener("keydown", function (e) {
   if (e.key === "+" || e.key === "=") zoomAt(1, centreX(), centreY());
   else if (e.key === "-" || e.key === "_") zoomAt(-1, centreX(), centreY());
   else if (e.key === "0" || e.key.toLowerCase() === "f") fitCampus();
+  else if (e.key.toLowerCase() === "b" && btnBus) btnBus.click();
 });
 
 // --- Boot -------------------------------------------------------------
@@ -426,6 +487,7 @@ async function loadMap() {
   if (!res.ok) throw new Error("campus.json: " + res.status);
   map = await res.json();
   buildMips();
+  initTransit({ requestDraw: requestDraw, panTo: centreOn }, map);
   fitCampus();                 // open on the whole campus
 }
 

@@ -57,6 +57,11 @@ html, body {
   border-color: #f4f4f4;
 }
 
+#controls button.is-on {
+  background: #3a6ea5;
+  border-color: #f4f4f4;
+}
+
 #controls button:disabled {
   opacity: 0.35;
   cursor: default;
@@ -78,4 +83,196 @@ html, body {
    so stack the hint above it. */
 @media (max-width: 620px) {
   #hint { bottom: 22px; }
+}
+
+
+/* --- Transit panel ---------------------------------------------------
+   Deliberately not pixel-art: this is dense, time-critical information
+   and it has to stay legible. It borrows the map's warm palette so it
+   sits with the artwork without pretending to be part of it. */
+#transit {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  bottom: 10px;
+  width: 330px;
+  display: flex;
+  flex-direction: column;
+  background: #241f1c;
+  color: #f2ece0;
+  border: 1px solid #4a403a;
+  border-radius: 8px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  z-index: 20;
+}
+
+.t-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid #3a322d;
+  flex: 0 0 auto;
+}
+
+.t-title {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  padding-left: 8px;
+  border-left: 3px solid transparent;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.t-x {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  font-size: 15px;
+  line-height: 1;
+  color: #cbbfae;
+  background: transparent;
+  border: 1px solid #4a403a;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.t-x:hover { background: #332c27; color: #fff; }
+
+.t-sub, .t-status, .t-msg {
+  margin: 0;
+  padding: 9px 14px;
+  color: #b6a898;
+  font-size: 11.5px;
+  border-bottom: 1px solid #3a322d;
+  flex: 0 0 auto;
+}
+.t-status.is-warn { color: #e8b04b; }
+
+.t-routes, .t-stops {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0 10px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+.t-route {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 14px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.t-route:hover { background: #2f2823; }
+
+.t-swatch {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 24px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.t-rtext { display: flex; flex-direction: column; min-width: 0; }
+.t-rname { font-weight: 560; }
+.t-rmeta { color: #9c8f80; font-size: 11px; }
+
+.t-dirs {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid #3a322d;
+  flex: 0 0 auto;
+}
+.t-dir {
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  color: #cbbfae;
+  background: #2f2823;
+  border: 1px solid #4a403a;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.t-dir.is-on { background: #f2ece0; color: #241f1c; border-color: #f2ece0; }
+
+/* Stops render as a timeline: a continuous rail in the route's colour
+   with a dot per stop, so the sequence reads at a glance. */
+.t-stop {
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px 7px 10px;
+  cursor: pointer;
+}
+.t-stop:hover { background: #2f2823; }
+.t-stop.is-sel { background: #38302a; }
+
+.t-rail {
+  position: relative;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.t-rail::before {
+  content: "";
+  position: absolute;
+  top: -14px;
+  bottom: -14px;
+  width: 3px;
+  background: var(--rail, #6b6b6b);
+  opacity: 0.55;
+}
+.t-stop:first-child .t-rail::before { top: 50%; }
+.t-stop:last-child .t-rail::before { bottom: 50%; }
+
+.t-dot {
+  position: relative;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #241f1c;
+  border: 2px solid var(--rail, #b6a898);
+}
+.t-dot.is-timed { background: #f2ece0; }
+
+.t-sname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.t-times {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: ui-monospace, monospace;
+  line-height: 1.25;
+}
+.t-clock { font-size: 12px; }
+.t-mins { font-size: 10.5px; color: #9c8f80; }
+.t-mins.is-soon { color: #7fd07f; font-weight: 700; }
+.t-none { font-size: 11px; color: #7d7166; }
+
+@media (max-width: 720px) {
+  #transit {
+    top: auto;
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: auto;
+    max-height: 62vh;
+  }
 }

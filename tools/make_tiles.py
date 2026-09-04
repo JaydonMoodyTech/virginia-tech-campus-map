@@ -17,7 +17,8 @@ Sheet layout: column = variant, row = tile id.
 import random, struct, zlib
 
 TILE = 16
-VARIANTS = 4
+VARIANTS = 8   # 4 left a visible lattice: every variant-2 cell carried an
+               # identically-placed skylight, so the repeat read as a grid
 
 # --- Palette ----------------------------------------------------------
 GRASS_BASE, GRASS_DARK, GRASS_LIGHT = (112, 164, 76), (92, 142, 60), (140, 188, 100)
@@ -61,7 +62,7 @@ def grass(v, rng):
         put(px, x, y + 1, GRASS_DARK)
     for _ in range(rng.randint(4, 7)):          # sun-caught tips
         put(px, rng.randrange(TILE), rng.randrange(TILE), GRASS_LIGHT)
-    if v == 3:                                  # one variant gets a tuft
+    if v in (3, 6):                             # some variants get a tuft
         cx, cy = rng.randrange(3, 12), rng.randrange(3, 12)
         for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, -1), (0, 1)):
             put(px, cx + dx, cy + dy, GRASS_DARK)
@@ -129,61 +130,109 @@ def road(v, rng):
 
 
 def parking(v, rng):
-    """Lot asphalt; two variants carry a painted stall line."""
+    """The driving aisle: plain asphalt. Markings belong to the bays.
+
+    This used to carry a stray stall line of its own, which read as ticks
+    scattered through the lane once the bays were banded in.
+    """
     px = blank(LOT_BASE)
     for _ in range(rng.randint(6, 10)):
         put(px, rng.randrange(TILE), rng.randrange(TILE), ASPHALT_D)
-    if v in (1, 3):
-        x = 3 if v == 1 else 11
-        for y in range(2, TILE - 2):
-            put(px, x, y, LOT_LINE)
+    for _ in range(rng.randint(2, 4)):
+        put(px, rng.randrange(TILE), rng.randrange(TILE), ASPHALT_L)
+    if v == 2:                                   # worn patch
+        x, y = rng.randrange(2, 11), rng.randrange(2, 11)
+        for dy in range(3):
+            for dx in range(4):
+                put(px, x + dx, y + dy, ASPHALT_D)
     return px
 
 
-def roof(v, rng):
-    """Shingled roof: staggered rows, each with a lit top edge."""
-    px = blank(ROOF_BASE)
+# Three roof palettes: (base, dark, light, eave base, eave dark, eave
+# light, eave rim). Assigned per building in tools/build_grid.py.
+ROOF_PALETTES = {
+    "a": ((170, 92, 64), (140, 70, 48), (194, 116, 84),
+          (104, 54, 38), (74, 38, 28), (124, 68, 48), (58, 32, 26)),
+    "b": ((104, 116, 132), (82, 94, 110), (128, 142, 158),
+          (58, 66, 80), (42, 48, 60), (74, 84, 100), (32, 36, 46)),
+    "c": ((150, 120, 78), (124, 96, 60), (176, 148, 102),
+          (92, 72, 44), (66, 50, 30), (112, 90, 58), (52, 40, 24)),
+}
+
+
+def shingles(px, v, base, dark, light):
+    """Staggered courses: lit nose, shadowed butt, offset row to row."""
     for y in range(TILE):
-        row = y // 4
-        stagger = 0 if row % 2 == 0 else 3
+        stagger = 0 if (y // 4) % 2 == 0 else 3
         if y % 4 == 0:
             for x in range(TILE):
-                px[y][x] = ROOF_LIGHT
+                px[y][x] = light
         elif y % 4 == 3:
             for x in range(TILE):
-                px[y][x] = ROOF_DARK
+                px[y][x] = dark
         for x in range(TILE):
             if (x + stagger + v) % 6 == 0 and y % 4 != 0:
-                px[y][x] = ROOF_DARK
-    return px
+                px[y][x] = dark
 
 
-def roof_edge(v, rng):
-    """The eave ringing every building: the same shingles, in shadow.
+def roof_for(style):
+    def painter(v, rng):
+        base, dark, light = ROOF_PALETTES[style][:3]
+        px = blank(base)
+        shingles(px, v, base, dark, light)
+        # Rooftop clutter -- a vent on some variants, a skylight on others.
+        # Real roofs are never clean, and it breaks up big flat blocks.
+        if v == 1:                               # roof vent, 1 cell in 8
+            x, y = rng.randrange(3, 10), rng.randrange(3, 10)
+            for dy in range(3):
+                for dx in range(4):
+                    put(px, x + dx, y + dy, dark)
+            for dx in range(4):
+                put(px, x + dx, y - 1, light)
+        elif v == 5:                             # skylight, 1 cell in 8
+            x, y = rng.randrange(4, 11), rng.randrange(4, 11)
+            for dy in range(2):
+                for dx in range(3):
+                    put(px, x + dx, y + dy, (188, 206, 214))   # glazing
+            for dx in range(3):
+                put(px, x + dx, y - 1, dark)
+        return px
+    return painter
+
+
+def eave_for(style):
+    """The eave ringing a building: the same shingles, in shadow.
 
     A solid dark band reads as a hole punched in the roof. Keeping the
-    shingle rows and simply dropping the value keeps the building one
-    object, while the 2px rim gives the crisp outline Stardew relies on
-    to separate a structure from the ground.
+    courses and dropping the value keeps the building one object, while
+    the 2px rim gives the crisp outline Stardew relies on to separate a
+    structure from the ground.
     """
-    px = blank(EDGE_BASE)
-    for y in range(TILE):
-        if y % 4 == 0:
-            for x in range(TILE):
-                px[y][x] = EDGE_LIGHT
-        elif y % 4 == 3:
-            for x in range(TILE):
-                px[y][x] = EDGE_DARK
-        stagger = 0 if (y // 4) % 2 == 0 else 3
-        for x in range(TILE):
-            if (x + stagger + v) % 6 == 0 and y % 4 != 0:
-                px[y][x] = EDGE_DARK
-    for i in range(TILE):                    # 2px rim on all four sides
-        for d in (0, 1):
-            put(px, i, d, EDGE_RIM)
-            put(px, i, TILE - 1 - d, EDGE_RIM)
-            put(px, d, i, EDGE_RIM)
-            put(px, TILE - 1 - d, i, EDGE_RIM)
+    def painter(v, rng):
+        _, _, _, base, dark, light, rim = ROOF_PALETTES[style]
+        px = blank(base)
+        shingles(px, v, base, dark, light)
+        for i in range(TILE):
+            for d in (0, 1):
+                put(px, i, d, rim)
+                put(px, i, TILE - 1 - d, rim)
+                put(px, d, i, rim)
+                put(px, TILE - 1 - d, i, rim)
+        return px
+    return painter
+
+
+def parking_stall(v, rng):
+    """Marked bays. The line sits at a fixed x so neighbouring cells join
+    into one continuous stripe across the lot instead of dashing."""
+    px = blank(LOT_BASE)
+    for _ in range(rng.randint(5, 9)):
+        put(px, rng.randrange(TILE), rng.randrange(TILE), ASPHALT_D)
+    for y in range(3, TILE - 1):                 # 1px line: 2px reads as a wall
+        put(px, 1, y, LOT_LINE)
+    for x in range(TILE):                        # kerb at the head of the bay
+        put(px, x, 0, ASPHALT_L)
+        put(px, x, 1, ASPHALT_D)
     return px
 
 
@@ -256,10 +305,14 @@ def hedge(v, rng):
 
 # Row order MUST match the tile ids in tools/build_grid.py.
 PAINTERS = [
-    ("grass", grass), ("path", dirt), ("road", road), ("building", roof),
-    ("water", water), ("tree", tree), ("roof_edge", roof_edge),
-    ("plaza", plaza), ("parking", parking), ("lawn", lawn),
-    ("pitch", pitch), ("garden", garden), ("steps", steps), ("hedge", hedge),
+    ("grass", grass), ("path", dirt), ("road", road),
+    ("building", roof_for("a")), ("water", water), ("tree", tree),
+    ("roof_edge", eave_for("a")), ("plaza", plaza), ("parking", parking),
+    ("lawn", lawn), ("pitch", pitch), ("garden", garden), ("steps", steps),
+    ("hedge", hedge),
+    ("building_b", roof_for("b")), ("building_c", roof_for("c")),
+    ("edge_b", eave_for("b")), ("edge_c", eave_for("c")),
+    ("parking_stall", parking_stall),
 ]
 
 
