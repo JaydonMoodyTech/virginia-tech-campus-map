@@ -6,6 +6,11 @@
 //
 // tools/serve.py implements the same contract for local development --
 // keep the two in step.
+//
+// CommonJS on purpose. Vercel's Node runtime reads a bare .js function as
+// CommonJS unless a package.json declares "type": "module", so ESM syntax
+// here fails to parse at deploy time. Staying CommonJS keeps this project
+// dependency-free and package.json-free, which is the whole point.
 
 const BT_BASE =
   "https://ridebt.org/index.php?option=com_ajax&module=bt_map" +
@@ -40,7 +45,7 @@ async function departures(stopCode, trips) {
   return (body && body.data) || [];
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   const { method = "", stops = "", trips = "3", patternName = "" } = req.query;
 
   try {
@@ -75,4 +80,4 @@ export default async function handler(req, res) {
   } catch (err) {
     return res.status(502).json({ error: String(err && err.message || err) });
   }
-}
+};
